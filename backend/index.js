@@ -17,10 +17,13 @@ app.post('/clients/:id/start', (req, res) => {
 
 app.post('/clients/:id/stop', (req, res) => {
   const { id } = req.params;
+  const { note } = req.body;
   const timer = timers[id];
   if (!timer) return res.status(400).json({ error: 'Timer not started' });
   timer.stop = Date.now();
-  // TODO: handle voice note and speech-to-text transcription
+  if (note) {
+    notes.push({ text: note, time: timer.stop, client: id });
+  }
   res.json({ status: 'stopped', client: id, start: timer.start, stop: timer.stop });
 });
 
