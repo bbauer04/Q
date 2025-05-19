@@ -6,25 +6,47 @@ app.use(cors());
 app.use(express.json());
 
 // In-memory storage
-const timers = {};
+const activeTimers = {};
+const timers = [];
 const notes = [];
+
+async function transcribeAudio(audioData) {
+  // Placeholder for real speech-to-text processing
+  // `audioData` could be a base64 string or binary buffer in a real app
+  return 'Transcription placeholder';
+}
 
 app.post('/clients/:id/start', (req, res) => {
   const { id } = req.params;
-  timers[id] = { start: Date.now() };
+  activeTimers[id] = { start: Date.now(), client: id };
   res.json({ status: 'started', client: id });
 });
 
-app.post('/clients/:id/stop', (req, res) => {
+app.post('/clients/:id/stop', async (req, res) => {
   const { id } = req.params;
-  const { note } = req.body;
-  const timer = timers[id];
+  const { note, audio } = req.body;
+  const timer = activeTimers[id];
   if (!timer) return res.status(400).json({ error: 'Timer not started' });
   timer.stop = Date.now();
-  if (note) {
-    notes.push({ text: note, time: timer.stop, client: id });
+
+  let text = note;
+  if (!text && audio) {
+    try {
+      text = await transcribeAudio(audio);
+    } catch (err) {
+      console.error('Failed to transcribe audio', err);
+    }
   }
-  res.json({ status: 'stopped', client: id, start: timer.start, stop: timer.stop });
+
+  const entry = { client: id, start: timer.start, stop: timer.stop };
+  if (text) {
+    entry.transcription = text;
+    notes.push({ text, time: timer.stop, client: id });
+  }
+  timers.push(entry);
+  delete activeTimers[id];
+
+  res.json({ status: 'stopped', ...entry });
 });
 
 app.post('/notes', (req, res) => {
@@ -33,9 +55,35 @@ app.post('/notes', (req, res) => {
   res.json({ status: 'noted' });
 });
 
-app.get('/summary', (req, res) => {
-  // TODO: integrate with AI service to summarize weekly entries
-  res.json({ timers, notes });
+async function summarizeWeek(entries) {
+  if (!process.env.OPENAI_API_KEY) {
+    return 'AI summary placeholder';
+  }
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'Summarize the following time entries' },
+        { role: 'user', content: JSON.stringify(entries) },
+      ],
+    }),
+  });
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || 'Failed to generate summary';
+}
+
+app.get('/summary', async (req, res) => {
+  const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentTimers = timers.filter((t) => t.stop >= oneWeekAgo);
+  const recentNotes = notes.filter((n) => n.time >= oneWeekAgo);
+  const entries = { timers: recentTimers, notes: recentNotes };
+  const summary = await summarizeWeek(entries);
+  res.json({ summary, entries });
 });
 
 const PORT = process.env.PORT || 3000;
